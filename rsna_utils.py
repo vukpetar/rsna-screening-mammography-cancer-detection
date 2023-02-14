@@ -142,9 +142,9 @@ def load_q1_pretrained(path, q1_model):
 
     return q1_model
 
-def load_image(df, index, patch_size):
+def load_image(df, img_path, index, patch_size):
     row = df.iloc[index]
-    img_path = f"./dataset/positive_images/{row.patient_id}/{row.image_id}.png"
+    img_path = f"{img_path}/{row.patient_id}/{row.image_id}.png"
     try:
         img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE) / 255
         h, w = img.shape[:2]
@@ -171,7 +171,7 @@ def patch_generator(image, patch_size):
             yield patch
             
             
-def z_filling(df, patient_ids, q1_model, patch_size, device, batch_size=32, max_num_patches = 32):
+def z_filling(df, img_path, patient_ids, q1_model, patch_size, device, batch_size=32, max_num_patches = 32):
 
     z_matrix, key_padding_masks = [], []
     for patient_id in patient_ids:
@@ -179,7 +179,7 @@ def z_filling(df, patient_ids, q1_model, patch_size, device, batch_size=32, max_
         patient_z_matrix = []
         rows = df[df.id == patient_id]
         for row in rows.iterrows():
-            img = load_image(df, row[0], patch_size)
+            img = load_image(df, img_path, row[0], patch_size)
             for patch in patch_generator(img, patch_size):
                 patches.append(patch)
         if len(patches) > max_num_patches:
@@ -205,6 +205,7 @@ def z_filling(df, patient_ids, q1_model, patch_size, device, batch_size=32, max_
 
 def run_iteration(
     df,
+    img_path,
     batch_patient_ids,
     labels,
     patch_size,
@@ -224,7 +225,7 @@ def run_iteration(
     if type(labels) == np.ndarray:
         labels = torch.from_numpy(labels).long().to(device)
 
-    z_matrix, key_padding_mask = z_filling(df, batch_patient_ids, q1_model, patch_size, device)
+    z_matrix, key_padding_mask = z_filling(df, img_path, batch_patient_ids, q1_model, patch_size, device)
     q1_optimizer.zero_grad()
     q2_optimizer.zero_grad()
 
@@ -234,7 +235,7 @@ def run_iteration(
             patches = []
             rows = df[df.id == patient_id]
             for row in rows.iterrows():
-                img = load_image(df, row[0], patch_size)
+                img = load_image(df, img_path, row[0], patch_size)
                 for patch in patch_generator(img, patch_size):
                     patches.append(patch)
 
@@ -471,7 +472,7 @@ class MetricLogger(object):
             header, total_time_str, total_time / len(iterable)))
 
 @torch.no_grad()
-def evaluate(df, data_loader, q1_model, q2_model, patch_size, device):
+def evaluate(df, img_path, data_loader, q1_model, q2_model, patch_size, device):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = MetricLogger(delimiter="  ")
@@ -480,7 +481,7 @@ def evaluate(df, data_loader, q1_model, q2_model, patch_size, device):
     for p_ids, target in metric_logger.log_every(data_loader, 10, header):
         target = target.to(device, non_blocking=True)
 
-        z_matrix, key_padding_mask = z_filling(df, p_ids, q1_model, patch_size, device)
+        z_matrix, key_padding_mask = z_filling(df, img_path, p_ids, q1_model, patch_size, device)
         output = q2_model(z_matrix, key_padding_mask)
         loss = criterion(output, target)
 
@@ -497,7 +498,7 @@ def evaluate(df, data_loader, q1_model, q2_model, patch_size, device):
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 def train_one_epoch(
-    df, patch_size, patches_per_in_inter, grad_acc_steps,
+    df, img_path, patch_size, patches_per_in_inter, grad_acc_steps,
     q1_model, q2_model, criterion, data_loader,
     q1_optimizer, q2_optimizer, inner_iterations, 
     device, epoch
@@ -515,6 +516,7 @@ def train_one_epoch(
         targets = targets.to(device, non_blocking=True)
         loss_value = run_iteration(
             df,
+            img_path,
             p_ids,
             targets,
             patch_size,
