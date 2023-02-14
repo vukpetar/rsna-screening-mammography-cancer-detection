@@ -1,13 +1,19 @@
 import sys
 sys.path.append('./classification')
 
+import time
+import datetime
 import math
+from collections import defaultdict, deque
 import numpy as np
 import cv2
+from random import shuffle
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-print(torch.__version__)
+import torch.distributed as dist
+from torch.utils.data.dataset import Dataset
+from timm.utils import accuracy
 from timm.models.layers import trunc_normal_
 
 from nextvit import NCB, ConvBNReLU, NTB
@@ -139,16 +145,20 @@ def load_q1_pretrained(path, q1_model):
 def load_image(df, index, patch_size):
     row = df.iloc[index]
     img_path = f"./dataset/positive_images/{row.patient_id}/{row.image_id}.png"
-    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE) / 255
-    h, w = img.shape[:2]
+    try:
+        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE) / 255
+        h, w = img.shape[:2]
 
-    xmin, ymin, xmax, ymax = (np.array(to_list(row.pad_breast_box)) * h).astype(int)
-    crop = img[ymin:ymax, xmin:xmax]
+        xmin, ymin, xmax, ymax = (np.array(to_list(row.pad_breast_box)) * h).astype(int)
+        crop = img[ymin:ymax, xmin:xmax]
+        
+        crop_h, crop_w = ymax - ymin, xmax - xmin
+        crop_h_full = math.ceil(crop_h / patch_size) * patch_size
+        crop_w_full = math.ceil(crop_w / patch_size) * patch_size
+        crop = np.pad(crop, ((0, crop_h_full - crop_h), (0, crop_w_full - crop_w)), 'constant')
+    except:
+        crop = np.random.random((384*3, 384*2))
     
-    crop_h, crop_w = ymax - ymin, xmax - xmin
-    crop_h_full = math.ceil(crop_h / patch_size) * patch_size
-    crop_w_full = math.ceil(crop_w / patch_size) * patch_size
-    crop = np.pad(crop, ((0, crop_h_full - crop_h), (0, crop_w_full - crop_w)), 'constant')
     
     return crop
 
@@ -234,11 +244,299 @@ def run_iteration(
                         z_matrix[patient_ind, z_index:z_index+len(z)] = z
 
                         y_pred = q2_model(z_matrix, key_padding_mask)
-                        loss = criterion(y_pred, labels)
+                        loss = criterion(y_pred, labels) / grad_acc_steps
                         z_index += len(z)
                         patches = []
-            if j % grad_acc_steps:
-                q1_optimizer.step()
-                q1_optimizer.zero_grad()
-                q2_optimizer.step()
-                q2_optimizer.zero_grad()
+        if (j+1) % grad_acc_steps:
+            q1_optimizer.step()
+            q1_optimizer.zero_grad()
+            q2_optimizer.step()
+            q2_optimizer.zero_grad()
+
+    if inner_iterations % grad_acc_steps != 0:
+        q1_optimizer.step()
+        q1_optimizer.zero_grad()
+        q2_optimizer.step()
+        q2_optimizer.zero_grad()
+
+    return loss.item()
+
+        
+
+class RsnaDataset(Dataset):
+    def __init__(self, patient_ids, labels, positive_ratio = "1in8",is_train=False):
+        self.patient_ids = patient_ids
+        self.labels = labels
+        self.is_train = is_train
+        
+        if not is_train:
+            self.length = len(patient_ids)
+        else:
+            p_num, all_num = positive_ratio.split("in")
+            self.initial_pos_loc = [1]*int(p_num) + [0]*int(all_num)
+            self.positive_indexes = np.where(labels == 1)[0]
+            self.negative_indexes = np.where(labels == 0)[0]
+            self.positive_index_locations = self.set_positive_index_locations(self.initial_pos_loc)
+            self.length = len(self.positive_index_locations) / np.sum(self.positive_index_locations) * len(self.positive_indexes)
+            self.positive_index = 0
+            self.negative_index = 0
+        self.length = int(self.length)
+            
+
+    def __len__(self):
+        return self.length
+
+    def set_positive_index_locations(self, initial_pos_loc):
+        self.positive_index_locations = initial_pos_loc.copy()
+        shuffle(self.positive_index_locations)
+        return self.positive_index_locations
+
+    def __getitem__(self, index):
+        
+        if not self.is_train:
+            p_id = self.patient_ids[index]
+            target = self.labels[index]
+        else:
+            if len(self.positive_index_locations):
+                class_ind = self.positive_index_locations.pop()
+            else:
+                self.positive_index_locations = self.set_positive_index_locations(self.initial_pos_loc)
+                class_ind = self.positive_index_locations.pop()
+                
+            if class_ind:
+                self.positive_index = self.positive_index % len(self.positive_indexes)
+                if self.positive_index == 0:
+                    shuffle(self.positive_indexes)
+                new_index = self.positive_indexes[self.positive_index]
+                self.positive_index += 1
+            else:
+                self.negative_index = self.negative_index % len(self.negative_indexes)
+                if self.negative_index == 0:
+                    shuffle(self.negative_indexes)
+                new_index = self.negative_indexes[self.negative_index]
+                self.negative_index += 1
+            p_id = self.patient_ids[new_index]
+            target = self.labels[new_index]
+                
+        return p_id, target
+
+def is_dist_avail_and_initialized():
+    if not dist.is_available():
+        return False
+    if not dist.is_initialized():
+        return False
+    return True
+
+class SmoothedValue(object):
+    """Track a series of values and provide access to smoothed values over a
+    window or the global series average.
+    """
+
+    def __init__(self, window_size=20, fmt=None):
+        if fmt is None:
+            fmt = "{median:.4f} ({global_avg:.4f})"
+        self.deque = deque(maxlen=window_size)
+        self.total = 0.0
+        self.count = 0
+        self.fmt = fmt
+
+    def update(self, value, n=1):
+        self.deque.append(value)
+        self.count += n
+        self.total += value * n
+
+    def synchronize_between_processes(self):
+        """
+        Warning: does not synchronize the deque!
+        """
+        if not is_dist_avail_and_initialized():
+            return
+        t = torch.tensor([self.count, self.total], dtype=torch.float64, device='cuda')
+        dist.barrier()
+        dist.all_reduce(t)
+        t = t.tolist()
+        self.count = int(t[0])
+        self.total = t[1]
+
+    @property
+    def median(self):
+        d = torch.tensor(list(self.deque))
+        return d.median().item()
+
+    @property
+    def avg(self):
+        d = torch.tensor(list(self.deque), dtype=torch.float32)
+        return d.mean().item()
+
+    @property
+    def global_avg(self):
+        return self.total / self.count
+
+    @property
+    def max(self):
+        return max(self.deque)
+
+    @property
+    def value(self):
+        return self.deque[-1]
+
+    def __str__(self):
+        return self.fmt.format(
+            median=self.median,
+            avg=self.avg,
+            global_avg=self.global_avg,
+            max=self.max,
+            value=self.value)
+
+
+class MetricLogger(object):
+    def __init__(self, delimiter="\t"):
+        self.meters = defaultdict(SmoothedValue)
+        self.delimiter = delimiter
+
+    def update(self, **kwargs):
+        for k, v in kwargs.items():
+            if isinstance(v, torch.Tensor):
+                v = v.item()
+            assert isinstance(v, (float, int))
+            self.meters[k].update(v)
+
+    def __getattr__(self, attr):
+        if attr in self.meters:
+            return self.meters[attr]
+        if attr in self.__dict__:
+            return self.__dict__[attr]
+        raise AttributeError("'{}' object has no attribute '{}'".format(
+            type(self).__name__, attr))
+
+    def __str__(self):
+        loss_str = []
+        for name, meter in self.meters.items():
+            loss_str.append(
+                "{}: {}".format(name, str(meter))
+            )
+        return self.delimiter.join(loss_str)
+
+    def synchronize_between_processes(self):
+        for meter in self.meters.values():
+            meter.synchronize_between_processes()
+
+    def add_meter(self, name, meter):
+        self.meters[name] = meter
+
+    def log_every(self, iterable, print_freq, header=None):
+        i = 0
+        if not header:
+            header = ''
+        start_time = time.time()
+        end = time.time()
+        iter_time = SmoothedValue(fmt='{avg:.4f}')
+        data_time = SmoothedValue(fmt='{avg:.4f}')
+        space_fmt = ':' + str(len(str(len(iterable)))) + 'd'
+        log_msg = [
+            header,
+            '[{0' + space_fmt + '}/{1}]',
+            'eta: {eta}',
+            '{meters}',
+            'time: {time}',
+            'data: {data}'
+        ]
+        if torch.cuda.is_available():
+            log_msg.append('max mem: {memory:.0f}')
+        log_msg = self.delimiter.join(log_msg)
+        MB = 1024.0 * 1024.0
+        for obj in iterable:
+            data_time.update(time.time() - end)
+            yield obj
+            iter_time.update(time.time() - end)
+            if i % print_freq == 0 or i == len(iterable) - 1:
+                eta_seconds = iter_time.global_avg * (len(iterable) - i)
+                eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
+                if torch.cuda.is_available():
+                    print(log_msg.format(
+                        i, len(iterable), eta=eta_string,
+                        meters=str(self),
+                        time=str(iter_time), data=str(data_time),
+                        memory=torch.cuda.max_memory_allocated() / MB))
+                else:
+                    print(log_msg.format(
+                        i, len(iterable), eta=eta_string,
+                        meters=str(self),
+                        time=str(iter_time), data=str(data_time)))
+            i += 1
+            end = time.time()
+        total_time = time.time() - start_time
+        total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+        print('{} Total time: {} ({:.4f} s / it)'.format(
+            header, total_time_str, total_time / len(iterable)))
+
+@torch.no_grad()
+def evaluate(df, data_loader, q1_model, q2_model, patch_size, device):
+    criterion = torch.nn.CrossEntropyLoss()
+
+    metric_logger = MetricLogger(delimiter="  ")
+    header = 'Test:'
+
+    for p_ids, target in metric_logger.log_every(data_loader, 10, header):
+        target = target.to(device, non_blocking=True)
+
+        z_matrix, key_padding_mask = z_filling(df, p_ids, q1_model, patch_size, device)
+        output = q2_model(z_matrix, key_padding_mask)
+        loss = criterion(output, target)
+
+        acc1,  = accuracy(output, target, topk=(1,))
+
+        batch_size = len(p_ids)
+        metric_logger.update(loss=loss.item())
+        metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print('* Acc@1 {top1.global_avg:.3f} loss {losses.global_avg:.3f}'
+            .format(top1=metric_logger.acc1, losses=metric_logger.loss))
+
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
+def train_one_epoch(
+    df, patch_size, patches_per_in_inter, grad_acc_steps,
+    q1_model, q2_model, criterion, data_loader,
+    q1_optimizer, q2_optimizer, inner_iterations, 
+    device, epoch
+):
+    q1_model.train(True)
+    q2_model.train(True)
+
+    metric_logger = MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    header = 'Epoch: [{}]'.format(epoch)
+    print_freq = 10
+
+    for p_ids, targets in metric_logger.log_every(data_loader, print_freq, header):
+
+        targets = targets.to(device, non_blocking=True)
+        loss_value = run_iteration(
+            df,
+            p_ids,
+            targets,
+            patch_size,
+            patches_per_in_inter,
+            q1_model,
+            q2_model,
+            criterion,
+            q1_optimizer,
+            q2_optimizer,
+            inner_iterations,
+            grad_acc_steps,
+            device
+        )
+
+        if not math.isfinite(loss_value):
+            print("Loss is {}, stopping training".format(loss_value))
+            sys.exit(1)
+
+        metric_logger.update(loss=loss_value)
+        metric_logger.update(q1_lr=q1_optimizer.param_groups[0]["lr"])
+        metric_logger.update(q2_lr=q2_optimizer.param_groups[0]["lr"])
+
+    metric_logger.synchronize_between_processes()
+    print("Averaged stats:", metric_logger)
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
