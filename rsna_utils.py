@@ -230,8 +230,8 @@ def run_iteration(
     q2_optimizer.zero_grad()
 
     for j in range(inner_iterations):
-        z_index = 0
         for patient_ind, patient_id in enumerate(batch_patient_ids):
+            z_index = 0
             patches = []
             rows = df[df.id == patient_id]
             for row in rows.iterrows():
@@ -239,26 +239,21 @@ def run_iteration(
                 for patch in patch_generator(img, patch_size):
                     patches.append(patch)
 
-                    if len(patches) == patches_per_in_inter:
-                        torch_image = torch.from_numpy(np.stack(patches, axis=0)).float().to(device)
-                        z = q1_model(torch_image)
-                        z_matrix[patient_ind, z_index:z_index+len(z)] = z
+                for p in range(0, len(patches), patches_per_in_inter):
+                    torch_image = torch.from_numpy(np.stack(patches[p:p+patches_per_in_inter], axis=0)).float().to(device)
+                    z = q1_model(torch_image)
+                    z_matrix[patient_ind, z_index:z_index+len(z)] = z.detach()
 
-                        y_pred = q2_model(z_matrix, key_padding_mask)
-                        loss = criterion(y_pred, labels) / grad_acc_steps
-                        z_index += len(z)
-                        patches = []
-        if (j+1) % grad_acc_steps:
+                    y_pred = q2_model(z_matrix, key_padding_mask)
+                    loss = criterion(y_pred, labels) / grad_acc_steps
+                    z_index += len(z)
+                patches = []
+
+        if (j+1) % grad_acc_steps == 0:
             q1_optimizer.step()
             q1_optimizer.zero_grad()
             q2_optimizer.step()
             q2_optimizer.zero_grad()
-
-    if inner_iterations % grad_acc_steps != 0:
-        q1_optimizer.step()
-        q1_optimizer.zero_grad()
-        q2_optimizer.step()
-        q2_optimizer.zero_grad()
 
     return loss.item()
 
@@ -507,7 +502,8 @@ def train_one_epoch(
     q2_model.train(True)
 
     metric_logger = MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('q1_lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('q2_lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
 
