@@ -231,10 +231,10 @@ def run_iteration(
 
     for j in range(inner_iterations):
         for patient_ind, patient_id in enumerate(batch_patient_ids):
-            z_index = 0
             patches = []
             rows = df[df.id == patient_id]
             for row in rows.iterrows():
+                z_index = 0
                 img = load_image(df, img_path, row[0], patch_size)
                 for patch in patch_generator(img, patch_size):
                     patches.append(patch)
