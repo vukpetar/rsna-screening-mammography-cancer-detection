@@ -18,7 +18,7 @@ def to_list(x):
 def load_image(df, img_path, index, patch_size):
     row = df.iloc[index]
     
-    img_path = (Path(img_path) / f"{row.patient_id}/{row.image_id}.png").as_posix()
+    img_path = (Path(img_path) / f"{row.machine_id}/{row.patient_id}/{row.image_id}.png").as_posix()
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE) / 255
     h, _ = img.shape[:2]
 
