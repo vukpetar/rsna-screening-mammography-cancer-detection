@@ -17,7 +17,7 @@ def run_iteration(
     batch_patient_ids,
     labels,
     patch_size,
-    patches_per_in_inter,
+    patches_per_in_iter,
     q1_model,
     q2_model,
     criterion,
@@ -47,8 +47,8 @@ def run_iteration(
                 for patch in patch_generator(img, patch_size):
                     patches.append(patch)
 
-                for p in range(0, len(patches), patches_per_in_inter):
-                    torch_image = torch.from_numpy(np.stack(patches[p:p+patches_per_in_inter], axis=0)).float().to(device)
+                for p in range(0, len(patches), patches_per_in_iter):
+                    torch_image = torch.from_numpy(np.stack(patches[p:p+patches_per_in_iter], axis=0)).float().to(device)
                     z = q1_model(torch_image)
                     z_matrix[patient_ind, z_index:z_index+len(z)] = z.detach()
 
@@ -66,7 +66,7 @@ def run_iteration(
     return loss.item()
 
 def train_one_epoch(
-    df, img_path, patch_size, patches_per_in_inter, grad_acc_steps,
+    df, img_path, patch_size, patches_per_in_iter, grad_acc_steps,
     q1_model, q2_model, criterion, data_loader,
     q1_optimizer, q2_optimizer, inner_iterations, 
     device, epoch
@@ -89,7 +89,7 @@ def train_one_epoch(
             p_ids,
             targets,
             patch_size,
-            patches_per_in_inter,
+            patches_per_in_iter,
             q1_model,
             q2_model,
             criterion,
