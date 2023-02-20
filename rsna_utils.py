@@ -84,7 +84,7 @@ class RsnaDataset(Dataset):
             self.length = len(patient_ids)
         else:
             p_num, all_num = positive_ratio.split("in")
-            self.initial_pos_loc = [1]*int(p_num) + [0]*int(all_num)
+            self.initial_pos_loc = [1]*int(p_num) + [0]*(int(all_num)-int(p_num))
             self.positive_indexes = np.where(labels == 1)[0]
             self.negative_indexes = np.where(labels == 0)[0]
             self.positive_index_locations = self.set_positive_index_locations(self.initial_pos_loc)
