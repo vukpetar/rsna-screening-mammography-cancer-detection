@@ -25,7 +25,9 @@ def run_iteration(
     q2_optimizer,
     inner_iterations,
     grad_acc_steps,
-    device
+    device,
+    img_mean=0,
+    img_std=1
 ):
     if type(labels) == list:
         labels = np.array(labels, dtype=np.int64)
@@ -43,7 +45,7 @@ def run_iteration(
             rows = df[df.id == patient_id]
             for row in rows.iterrows():
                 z_index = 0
-                img = load_image(df, img_path, row[0], patch_size)
+                img = load_image(df, img_path, row[0], patch_size, img_mean, img_std)
                 for patch in patch_generator(img, patch_size):
                     patches.append(patch)
 
@@ -71,7 +73,7 @@ def train_one_epoch(
     df, img_path, patch_size, patches_per_in_iter, grad_acc_steps,
     q1_model, q2_model, criterion, data_loader,
     q1_optimizer, q2_optimizer, inner_iterations, 
-    device, epoch
+    device, epoch, img_mean, img_std
 ):
     q1_model.train(True)
     q2_model.train(True)
@@ -99,7 +101,9 @@ def train_one_epoch(
             q2_optimizer,
             inner_iterations,
             grad_acc_steps,
-            device
+            device,
+            img_mean,
+            img_std
         )
 
         if not math.isfinite(loss_value):

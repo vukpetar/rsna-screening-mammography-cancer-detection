@@ -59,7 +59,9 @@ def z_filling(
     patch_size,
     device,
     batch_size=32,
-    max_num_patches=32
+    max_num_patches=32,
+    img_mean=0,
+    img_std=1
 ):
 
     z_matrix, key_padding_masks = [], []
@@ -68,7 +70,7 @@ def z_filling(
         patient_z_matrix = []
         rows = df[df.id == patient_id]
         for row in rows.iterrows():
-            img = load_image(df, img_path, row[0], patch_size)
+            img = load_image(df, img_path, row[0], patch_size, img_mean, img_std)
             for patch in patch_generator(img, patch_size):
                 patches.append(patch)
         if len(patches) > max_num_patches:
