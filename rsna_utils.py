@@ -15,11 +15,20 @@ def to_list(x):
     if isinstance(x, list): return x
     if isinstance(x, str): return eval(x)
 
-def load_image(df, img_path, index, patch_size):
+def load_image(
+    df,
+    img_path,
+    index,
+    patch_size,
+    mean=0,
+    std=1
+):
+    
     row = df.iloc[index]
     
     img_path = (Path(img_path) / f"{row.machine_id}/{row.patient_id}/{row.image_id}.png").as_posix()
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE) / 255
+    img = (img - mean) / std
     h, _ = img.shape[:2]
 
     xmin, ymin, xmax, ymax = (np.array(to_list(row.pad_breast_box)) * h).astype(int)
@@ -42,7 +51,16 @@ def patch_generator(image, patch_size):
             yield patch
             
             
-def z_filling(df, img_path, patient_ids, q1_model, patch_size, device, batch_size=32, max_num_patches = 32):
+def z_filling(
+    df,
+    img_path,
+    patient_ids,
+    q1_model,
+    patch_size,
+    device,
+    batch_size=32,
+    max_num_patches=32
+):
 
     z_matrix, key_padding_masks = [], []
     for patient_id in patient_ids:
@@ -75,7 +93,13 @@ def z_filling(df, img_path, patient_ids, q1_model, patch_size, device, batch_siz
     return torch.stack(z_matrix, 0), torch.stack(key_padding_masks, 0)
 
 class RsnaDataset(Dataset):
-    def __init__(self, patient_ids, labels, positive_ratio = "1in8",is_train=False):
+    def __init__(
+        self,
+        patient_ids,
+        labels,
+        positive_ratio="1in8",
+        is_train=False
+    ):
         self.patient_ids = patient_ids
         self.labels = labels
         self.is_train = is_train

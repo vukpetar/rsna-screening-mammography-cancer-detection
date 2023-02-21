@@ -99,14 +99,20 @@ class Q1Net(nn.Module):
 
 class Q2Net(nn.Module):
 
-    def __init__(self, transformer_dim = 1024):
+    def __init__(
+        self,
+        transformer_dim=1024,
+        dim_feedforward=512,
+        nhead=4,
+        dropout=0.25
+    ):
         super(Q2Net, self).__init__()
 
         self.transformer = nn.TransformerEncoderLayer(
             d_model=transformer_dim,
-            dim_feedforward=2*transformer_dim,
-            nhead=4,
-            dropout=0.25,
+            dim_feedforward=dim_feedforward,
+            nhead=nhead,
+            dropout=dropout,
             batch_first=True,
         ) 
         self.head = nn.Linear(transformer_dim, 2)
