@@ -44,21 +44,21 @@ def run_iteration(
             patches = []
             rows = df[df.id == patient_id]
             for row in rows.iterrows():
-                z_index = 0
                 img = load_image(df, img_path, row[0], patch_size, img_mean, img_std)
                 for patch in patch_generator(img, patch_size):
                     patches.append(patch)
 
-                for p in range(0, len(patches), patches_per_in_iter):
-                    torch_image = torch.from_numpy(np.stack(patches[p:p+patches_per_in_iter], axis=0)).float().to(device)
-                    z = q1_model(torch_image)
-                    z_matrix[patient_ind, z_index:z_index+len(z)] = z
-                    z_index += len(z)
+            z_index = 0
+            for p in range(0, len(patches), patches_per_in_iter):
+                torch_image = torch.from_numpy(np.stack(patches[p:p+patches_per_in_iter], axis=0)).float().to(device)
+                z = q1_model(torch_image)
+                z_matrix[patient_ind, z_index:z_index+len(z)] = z
+                z_index += len(z)
 
-                    y_pred = q2_model(z_matrix, key_padding_mask)
-                    loss = criterion(y_pred, labels) / grad_acc_steps
-                    loss.backward(retain_graph=True)
-                    z_matrix = z_matrix.detach()
+                y_pred = q2_model(z_matrix, key_padding_mask)
+                loss = criterion(y_pred, labels) / grad_acc_steps
+                loss.backward(retain_graph=True)
+                z_matrix = z_matrix.detach()
                 patches = []
 
         if (j+1) % grad_acc_steps == 0:
