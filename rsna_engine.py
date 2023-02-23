@@ -59,7 +59,7 @@ def run_iteration(
                 loss = criterion(y_pred, labels) / grad_acc_steps
                 loss.backward(retain_graph=True)
                 z_matrix = z_matrix.detach()
-                patches = []
+            patches = []
 
         if (j+1) % grad_acc_steps == 0:
             q1_optimizer.step()
