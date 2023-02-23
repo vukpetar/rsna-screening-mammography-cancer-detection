@@ -26,6 +26,7 @@ def run_iteration(
     inner_iterations,
     grad_acc_steps,
     device,
+    max_num_patches=32,
     img_mean=0,
     img_std=1
 ):
@@ -35,7 +36,15 @@ def run_iteration(
     if type(labels) == np.ndarray:
         labels = torch.from_numpy(labels).long().to(device)
 
-    z_matrix, key_padding_mask = z_filling(df, img_path, batch_patient_ids, q1_model, patch_size, device)
+    z_matrix, key_padding_mask = z_filling(
+        df,
+        img_path,
+        batch_patient_ids,
+        q1_model,
+        patch_size,
+        device,
+        max_num_patches=max_num_patches
+    )
     q1_optimizer.zero_grad()
     q2_optimizer.zero_grad()
 
@@ -48,6 +57,7 @@ def run_iteration(
                 for patch in patch_generator(img, patch_size):
                     patches.append(patch)
 
+            patches = patches[:max_num_patches]
             z_index = 0
             for p in range(0, len(patches), patches_per_in_iter):
                 torch_image = torch.from_numpy(np.stack(patches[p:p+patches_per_in_iter], axis=0)).float().to(device)
@@ -73,7 +83,7 @@ def train_one_epoch(
     df, img_path, patch_size, patches_per_in_iter, grad_acc_steps,
     q1_model, q2_model, criterion, data_loader,
     q1_optimizer, q2_optimizer, inner_iterations, 
-    device, epoch, img_mean, img_std
+    device, epoch, max_num_patches, img_mean, img_std
 ):
     q1_model.train(True)
     q2_model.train(True)
@@ -102,6 +112,7 @@ def train_one_epoch(
             inner_iterations,
             grad_acc_steps,
             device,
+            max_num_patches,
             img_mean,
             img_std
         )
