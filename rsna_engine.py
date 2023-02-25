@@ -2,6 +2,7 @@ import sys
 import math
 import numpy as np
 import torch
+from torch.autograd import Variable
 from timm.utils import accuracy
 from rsna_utils import (
     load_image,
@@ -43,7 +44,9 @@ def run_iteration(
         q1_model,
         patch_size,
         device,
-        max_num_patches=max_num_patches
+        max_num_patches=max_num_patches,
+        img_mean=img_mean,
+        img_std=img_std
     )
     q1_optimizer.zero_grad()
     q2_optimizer.zero_grad()
@@ -58,17 +61,17 @@ def run_iteration(
                     patches.append(patch)
 
             patches = patches[:max_num_patches]
-            z_index = 0
             for p in range(0, len(patches), patches_per_in_iter):
-                torch_image = torch.from_numpy(np.stack(patches[p:p+patches_per_in_iter], axis=0)).float().to(device)
+                b_patches = patches[p:p+patches_per_in_iter]
+                torch_image = torch.from_numpy(np.stack(b_patches, axis=0)).float().to(device)
                 z = q1_model(torch_image)
-                z_matrix[patient_ind, z_index:z_index+len(z)] = z
+                z_matrix_variable = Variable(z_matrix)
+                z_matrix_variable[patient_ind, p:p+len(b_patches)] = z
                 z_index += len(z)
 
-                y_pred = q2_model(z_matrix, key_padding_mask)
+                y_pred = q2_model(z_matrix_variable, key_padding_mask)
                 loss = criterion(y_pred, labels) / grad_acc_steps
-                loss.backward(retain_graph=True)
-                z_matrix = z_matrix.detach()
+                loss.backward(retain_graph=False)
             patches = []
 
         if (j+1) % grad_acc_steps == 0:
