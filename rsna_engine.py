@@ -67,7 +67,6 @@ def run_iteration(
                 z = q1_model(torch_image)
                 z_matrix_variable = Variable(z_matrix)
                 z_matrix_variable[patient_ind, p:p+len(b_patches)] = z
-                z_index += len(z)
 
                 y_pred = q2_model(z_matrix_variable, key_padding_mask)
                 loss = criterion(y_pred, labels) / grad_acc_steps
