@@ -12,7 +12,7 @@ import torch.distributed as dist
 from torch.utils.data.dataset import Dataset
 
 def to_list(x):
-    if isinstance(x, list): return x
+    if isinstance(x, (list, tuple)): return x
     if isinstance(x, str): return eval(x)
 
 def load_image(

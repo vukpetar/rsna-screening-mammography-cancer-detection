@@ -2,6 +2,8 @@ import sys
 import math
 import numpy as np
 import torch
+import imgaug
+import imgaug.augmenters as iaa
 from random import shuffle
 from timm.utils import accuracy
 from rsna_utils import (
@@ -10,6 +12,20 @@ from rsna_utils import (
     patch_generator,
     MetricLogger,
     SmoothedValue
+)
+
+sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+seq = iaa.Sequential(
+    [
+        # apply the following augmenters to most images
+        iaa.Fliplr(0.5), # horizontally flip 50% of all images
+        iaa.Flipud(0.3), # vertically flip 30% of all images
+        sometimes(iaa.Affine(
+            rotate=(-20, 20), # rotate by -20 to +20 degrees
+            order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+        ))
+    ],
+    random_order=True
 )
 
 def run_iteration(
@@ -57,6 +73,7 @@ def run_iteration(
             rows = df[df.id == patient_id]
             for row in rows.iterrows():
                 img = load_image(df, img_path, row[0], patch_size, img_mean, img_std)
+                img = seq.augment_image(img)
                 for patch in patch_generator(img, patch_size):
                     patches.append(patch)
 
